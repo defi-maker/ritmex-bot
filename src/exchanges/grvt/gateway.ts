@@ -1302,7 +1302,10 @@ function buildUnsignedOrder(params: {
 
   const trigger = buildTriggerMetadata(orderParams);
   const metadata = {
-    client_order_id: generateClientOrderId(),
+    // Preserve caller supplied IDs (the grid engine uses them to reconcile
+    // entries/exits after reconnects).  Fall back to a unique GRVT ID for
+    // generic callers that do not provide one.
+    client_order_id: orderParams.clientOrderId?.trim() || generateClientOrderId(),
     ...(trigger ? { trigger } : {}),
   };
 

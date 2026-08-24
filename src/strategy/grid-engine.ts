@@ -112,6 +112,11 @@ interface EngineOptions {
 const EPSILON = 1e-8;
 const FINAL_STATUSES = new Set(["FILLED", "CANCELED", "CANCELLED", "REJECTED", "EXPIRED"]);
 
+function isMaxOpenOrdersError(error: unknown): boolean {
+  const message = extractMessage(error).toLowerCase();
+  return message.includes("max open orders") || message.includes("2090");
+}
+
 // ---------------------------------------------------------------------------
 // GridEngine：I/O 编排层。所有网格决策在 grid-logic.ts 的纯函数中完成。
 // ---------------------------------------------------------------------------
@@ -162,6 +167,7 @@ export class GridEngine {
   private lastPlacementOrdersVersion = -1;
   private lastLimitAttemptAt = 0;
   private lastStalenessLogAt = 0;
+  private maxOpenOrdersHalted = false;
   private shiftCloseAccountVersion = -1;
   private shiftCloseAt = 0;
 
@@ -325,6 +331,10 @@ export class GridEngine {
         this.openOrders = Array.isArray(orders)
           ? orders.filter((order) => order.symbol === this.config.symbol)
           : [];
+        if (this.maxOpenOrdersHalted && this.activeGridLimitOrders().length < this.maxOpenOrdersLimit()) {
+          this.maxOpenOrdersHalted = false;
+          this.log("info", t("log.gridEngine.maxOpenOrdersResumed"));
+        }
         this.synchronizeLocks(this.openOrders);
         this.ordersVersion += 1;
         this.ordersFeedLastAt = this.now();
@@ -686,6 +696,8 @@ export class GridEngine {
   }
 
   private canPlaceLimitNow(): boolean {
+    if (this.maxOpenOrdersHalted) return false;
+    if (this.activeGridLimitOrders().length >= this.maxOpenOrdersLimit()) return false;
     if (this.pendings["LIMIT"]) return false;
     const now = this.now();
     const snapshotStale = this.lastPlacementOrdersVersion === this.ordersVersion;
@@ -705,6 +717,10 @@ export class GridEngine {
       return false;
     }
     return true;
+  }
+
+  private maxOpenOrdersLimit(): number {
+    return Math.max(2, Math.floor(this.config.maxOpenOrders ?? this.config.gridLevels));
   }
 
   private async placeGridOrder(
@@ -750,6 +766,10 @@ export class GridEngine {
       });
     } catch (error) {
       this.log("error", t("log.gridEngine.placeFailed", { side: action.side, price: action.price, error: extractMessage(error) }));
+      if (isMaxOpenOrdersError(error)) {
+        this.maxOpenOrdersHalted = true;
+        this.log("warn", t("log.gridEngine.maxOpenOrdersHalted", { limit: this.maxOpenOrdersLimit() }));
+      }
     }
     state.inflight = null;
 

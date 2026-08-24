@@ -348,6 +348,8 @@ export interface GridConfig {
   exchangeStopEnabled: boolean;
   reconcileIntervalMs: number;
   uncoveredGraceMs: number;
+  /** Hard cap on active grid limit orders (entries + exits). */
+  maxOpenOrders?: number;
 }
 
 const resolveBasisSymbol = (envKeys: string[], fallback: string): string => {
@@ -436,6 +438,10 @@ export const gridConfig: GridConfig = {
   exchangeStopEnabled: parseBoolean(process.env.GRID_EXCHANGE_STOP_ENABLED, true),
   reconcileIntervalMs: Math.max(1000, parseNumber(process.env.GRID_RECONCILE_INTERVAL_MS, 30_000)),
   uncoveredGraceMs: Math.max(0, parseNumber(process.env.GRID_UNCOVERED_GRACE_MS, 5000)),
+  maxOpenOrders: Math.max(
+    2,
+    Math.floor(parseNumber(process.env.GRID_MAX_OPEN_ORDERS, Math.max(2, Math.floor(parseNumber(process.env.GRID_LEVELS, 10)))))
+  ),
 };
 
 gridConfig.maxPositionSize = resolveGridMaxPosition(gridConfig.orderSize, gridConfig.gridLevels);

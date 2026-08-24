@@ -29,6 +29,8 @@ class FakeAdapter implements ExchangeAdapter {
 
   currentOrders: Order[] = [];
   createdOrders: CreateOrderParams[] = [];
+  createOrderCalls = 0;
+  createOrderError: Error | null = null;
   limitOrders: CreateOrderParams[] = [];
   marketOrders: CreateOrderParams[] = [];
   stopOrders: CreateOrderParams[] = [];
@@ -97,6 +99,8 @@ class FakeAdapter implements ExchangeAdapter {
   }
 
   async createOrder(params: CreateOrderParams): Promise<Order> {
+    this.createOrderCalls += 1;
+    if (this.createOrderError) throw this.createOrderError;
     orderCounter += 1;
     const orderId = `srv-${orderCounter}`;
     const order: Order = {
@@ -357,6 +361,28 @@ describe("GridEngine modes", () => {
     await drive(engine, 8);
     expect(adapter.limitOrders.length).toBeGreaterThan(0);
     expect(adapter.limitOrders.every((p) => p.side === "SELL")).toBe(true);
+    engine.stop();
+  });
+});
+
+describe("GridEngine open-order limit", () => {
+  it("does not place more active limit orders than maxOpenOrders", async () => {
+    const adapter = new FakeAdapter();
+    const engine = await bootEngine(makeConfig({ maxOpenOrders: 2 }), adapter);
+    await drive(engine, 12);
+
+    expect(adapter.limitOrders).toHaveLength(2);
+    expect(adapter.currentOrders).toHaveLength(2);
+    engine.stop();
+  });
+
+  it("halts further placements after GRVT rejects an order for its open-order limit", async () => {
+    const adapter = new FakeAdapter();
+    adapter.createOrderError = new Error("2090: Max open orders exceeded");
+    const engine = await bootEngine(makeConfig({ maxOpenOrders: 10 }), adapter);
+    await drive(engine, 12);
+
+    expect(adapter.createOrderCalls).toBe(1);
     engine.stop();
   });
 });

@@ -994,6 +994,14 @@ const translations: Record<string, TranslationEntry> = {
     zh: "订单流疑似停滞（下单后长时间未反映），暂停新下单",
     en: "Order feed looks stalled (placements are not showing up); pausing new orders",
   },
+  "log.gridEngine.maxOpenOrdersHalted": {
+    zh: "活动委托已达上限 {limit}，暂停继续挂单",
+    en: "Active grid orders reached the limit ({limit}); pausing placements",
+  },
+  "log.gridEngine.maxOpenOrdersResumed": {
+    zh: "活动委托低于上限，恢复挂单",
+    en: "Active orders dropped below the limit; resuming placements",
+  },
   "log.gridEngine.placeFailed": {
     zh: "挂单失败 ({side} @ {price}): {error}",
     en: "Failed to place order ({side} @ {price}): {error}",
