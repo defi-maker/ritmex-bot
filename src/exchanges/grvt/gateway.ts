@@ -1105,7 +1105,7 @@ function mapOrder(order: IOrder, symbol: string): Order {
     : (order.is_market ? "MARKET" : "LIMIT");
   return {
     orderId: order.order_id ?? metadata?.client_order_id ?? cryptoRandomId(),
-    clientOrderId: metadata?.client_order_id ?? "",
+    clientOrderId: decodeGridClientOrderId(metadata?.client_order_id) ?? metadata?.client_order_id ?? "",
     symbol,
     side: leg?.is_buying_asset ? "BUY" : "SELL",
     type: derivedType,
@@ -1302,10 +1302,7 @@ function buildUnsignedOrder(params: {
 
   const trigger = buildTriggerMetadata(orderParams);
   const metadata = {
-    // Preserve caller supplied IDs (the grid engine uses them to reconcile
-    // entries/exits after reconnects).  Fall back to a unique GRVT ID for
-    // generic callers that do not provide one.
-    client_order_id: orderParams.clientOrderId?.trim() || generateClientOrderId(),
+    client_order_id: toGrvtClientOrderId(orderParams.clientOrderId),
     ...(trigger ? { trigger } : {}),
   };
 
@@ -1525,11 +1522,82 @@ function toDecimalString(value: number | string | undefined): string {
   return value.toString();
 }
 
+const GRVT_CLIENT_ORDER_ID_MIN = 1n << 63n;
+const GRVT_CLIENT_ORDER_ID_MAX = 1n << 64n;
+const GRVT_GRID_ID_MAGIC = 0b1111010110n;
+const GRVT_GRID_TIMESTAMP_MASK = (1n << 32n) - 1n;
+const GRVT_GRID_ENTRY_TARGET = 0x7f;
+
+/**
+ * GRVT accepts client order IDs as decimal uint64 strings.  Grid IDs are
+ * encoded so that an open order can still be classified after a restart.
+ */
+function toGrvtClientOrderId(clientOrderId: string | undefined): string {
+  const supplied = clientOrderId?.trim();
+  if (supplied) {
+    const gridId = encodeGridClientOrderId(supplied);
+    if (gridId) return gridId;
+    if (/^\d+$/.test(supplied)) {
+      const value = BigInt(supplied);
+      if (value >= GRVT_CLIENT_ORDER_ID_MIN && value < GRVT_CLIENT_ORDER_ID_MAX) {
+        return supplied;
+      }
+    }
+  }
+  return generateClientOrderId();
+}
+
+function encodeGridClientOrderId(clientOrderId: string): string | null {
+  const entry = /^grid-(\d+)-E-(\d+)-([0-9a-f]+)$/i.exec(clientOrderId);
+  const exit = /^grid-(\d+)-X-(\d+)-(\d+)-([0-9a-f]+)$/i.exec(clientOrderId);
+  const match = entry ?? exit;
+  if (!match) return null;
+
+  const version = Number(match[1]);
+  const source = Number(match[2]);
+  const target = entry ? GRVT_GRID_ENTRY_TARGET : Number(match[3]);
+  const timestampHex = entry ? match[3] : match[4];
+  if (
+    !Number.isInteger(version) || version < 0 || version > 0x7f ||
+    !Number.isInteger(source) || source < 0 || source > 0x7f ||
+    !Number.isInteger(target) || target < 0 || target > 0x7f
+  ) {
+    return null;
+  }
+
+  const timestamp = BigInt(`0x${timestampHex}`) & GRVT_GRID_TIMESTAMP_MASK;
+  const kind = entry ? 0n : 1n;
+  return (
+    (GRVT_GRID_ID_MAGIC << 54n) |
+    (BigInt(version) << 47n) |
+    (kind << 46n) |
+    (BigInt(source) << 39n) |
+    (BigInt(target) << 32n) |
+    timestamp
+  ).toString();
+}
+
+function decodeGridClientOrderId(clientOrderId: string | undefined): string | null {
+  if (!clientOrderId || !/^\d+$/.test(clientOrderId)) return null;
+  const value = BigInt(clientOrderId);
+  if (value < GRVT_CLIENT_ORDER_ID_MIN || value >= GRVT_CLIENT_ORDER_ID_MAX) return null;
+  if ((value >> 54n) !== GRVT_GRID_ID_MAGIC) return null;
+
+  const version = Number((value >> 47n) & 0x7fn);
+  const isExit = ((value >> 46n) & 1n) === 1n;
+  const source = Number((value >> 39n) & 0x7fn);
+  const target = Number((value >> 32n) & 0x7fn);
+  const timestampHex = (value & GRVT_GRID_TIMESTAMP_MASK).toString(16);
+  if (!isExit && target === GRVT_GRID_ENTRY_TARGET) {
+    return `grid-${version}-E-${source}-${timestampHex}`;
+  }
+  if (isExit) return `grid-${version}-X-${source}-${target}-${timestampHex}`;
+  return null;
+}
+
 function generateClientOrderId(): string {
-  const random = Math.floor(Math.random() * 1_000_000)
-    .toString()
-    .padStart(6, "0");
-  return `${Date.now()}${random}`;
+  const entropy = (BigInt(Date.now()) * 1_000_000n + BigInt(randomInt(0, 1_000_000))) % GRVT_CLIENT_ORDER_ID_MIN;
+  return (GRVT_CLIENT_ORDER_ID_MIN + entropy).toString();
 }
 
 function cryptoRandomId(): string {
